@@ -1,0 +1,70 @@
+@import "tailwindcss";
+
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  font-family: 'Inter', 'PingFang SC', -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button, input, textarea, select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+/* 浅色滚动条 */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.18); }
+
+/* 深色滚动条 — 通过 body.dark 切换 */
+body.dark::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); }
+body.dark::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+/* 点阵纹理 — 仅浅色模式 */
+body:not(.dark) .dot-grid::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; width: 100%; height: 100%;
+  background-image: radial-gradient(circle, #000 1px, transparent 1px);
+  background-size: 40px 40px;
+  opacity: 0.025;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* 全局过渡 */
+body {
+  transition: background 0.3s ease, color 0.3s ease;
+}
+
+/* Toast 弹窗动画 */
+@keyframes toast-in {
+  0% { opacity: 0; transform: translateY(12px) scale(0.96); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes toast-out {
+  0% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-8px) scale(0.96); }
+}
+.toast-enter {
+  animation: toast-in 0.3s ease forwards;
+}
+.toast-exit {
+  animation: toast-out 0.25s ease forwards;
+}
