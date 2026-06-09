@@ -5,6 +5,7 @@
 <div align="center">
 
 <img src="docs/logo.svg" alt="Wallpeel Logo" width="100">
+
 # Wallpeel
 
 **你的壁纸，不止于壁纸。**
