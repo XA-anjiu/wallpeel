@@ -1,8 +1,30 @@
-# Wallpeel 🎨
+<p align="center">
+  <img src="docs/banner.png" alt="Wallpeel — Unleash your Wallpaper Engine" width="100%">
+</p>
 
-**Wallpaper Engine 壁纸资源提取工具 | Wallpaper Engine Resource Extractor**
+<div align="center">
 
-一个现代化的桌面应用，用于提取和管理 Wallpaper Engine 的壁纸资源。支持 PKG 和 MPKG 格式，自动识别壁纸类型，批量提取视频、图片等资源。
+# Wallpeel
+
+**你的壁纸，不止于壁纸。**
+
+Wallpaper Engine 壁纸资源提取工具。<br/>
+自动识别、批量提取、轻松管理 — 让每一份创意都触手可及。
+
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/XA-anjiu/wallpeel?style=flat)](https://github.com/XA-anjiu/wallpeel/stargazers)
+
+[下载](#-快速开始) · [使用说明](#-使用说明) · [反馈问题](https://github.com/XA-anjiu/wallpeel/issues)
+
+</div>
+
+---
+
+## Wallpeel 是什么？
+
+Wallpeel 让你轻松提取 Wallpaper Engine 的壁纸资源。不管是视频壁纸还是场景壁纸，只需一键，就能把喜欢的素材保存到本地。
+
+告别手动翻找文件夹的日子。Wallpeel 自动扫描 Steam 库，智能识别壁纸类型，批量提取视频、图片等资源。你的创意库，从此井井有条。
 
 ---
 
