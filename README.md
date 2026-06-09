@@ -154,4 +154,3 @@ MIT License
 
 - [RePKG](https://github.com/notscuffed/repkg) - PKG 格式解析工具
 - [unmpkg](https://github.com/aqnya/unmpkg) - MPKG 格式参考
-- [Wallpaper Engine](https://store.steampowered.com/app/431960/) - 壁纸引擎
