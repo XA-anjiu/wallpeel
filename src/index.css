@@ -22,6 +22,11 @@ button, input, textarea, select {
   font: inherit;
 }
 
+input::placeholder {
+  color: inherit;
+  opacity: 0.5;
+}
+
 button {
   cursor: pointer;
 }

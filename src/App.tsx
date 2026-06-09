@@ -36,6 +36,7 @@ interface WallpaperInfo {
   contentRating: string
   filePath: string
   hasPreview: boolean
+  previewPath: string
   fileSize: number
   hasMP4: boolean
   mp4Path: string
@@ -52,7 +53,7 @@ interface WallpaperInfo {
   needsExtraction: boolean
 }
 
-interface WeExtractorAPI {
+interface WallpeelAPI {
   selectFolder: () => Promise<string | null>
   openPath: (targetPath: string) => Promise<void>
   autoFindWallpaperDir: () => Promise<{ paths: string[]; count: number }>
@@ -80,11 +81,13 @@ interface WeExtractorAPI {
   windowMinimize: () => Promise<void>
   windowMaximize: () => Promise<void>
   windowClose: () => Promise<void>
+  getDesktopPath: () => Promise<string>
+  onBatchExtractProgress: (callback: (data: { id: string; title: string; success: boolean; copiedCount?: number; error?: string }) => void) => void
 }
 
 declare global {
   interface Window {
-    weExtractor: WeExtractorAPI
+    wallpeel: WallpeelAPI
   }
 }
 
@@ -125,7 +128,7 @@ const lightTheme = {
   tagBorder: 'rgba(0,0,0,0.06)',
   tagText: '#666',
   fileBg: '#fafafa',
-  fileBorder: 'rgba(0,0,0,0.04)',
+  fileBorder: 'rgba(0,0,0,0.1)',
   scrollHover: 'rgba(0,0,0,0.18)',
   cardEmpty: '#e8e8e8',
   fontFamily: "'Inter', 'PingFang SC', sans-serif",
@@ -140,32 +143,32 @@ const darkTheme = {
   textSecondary: '#888',
   textTertiary: '#666',
   textMuted: '#444',
-  border: 'rgba(255,255,255,0.08)',
-  borderStrong: 'rgba(255,255,255,0.12)',
-  headerBg: 'rgba(0,0,0,0.8)',
-  cardBg: '#0a0a0a',
-  cardBorder: 'rgba(255,255,255,0.06)',
-  cardShadow: '0 1px 3px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.04)',
+  border: 'rgba(255,255,255,0.12)',
+  borderStrong: 'rgba(255,255,255,0.18)',
+  headerBg: 'rgba(14,14,14,0.85)',
+  cardBg: '#141414',
+  cardBorder: 'rgba(255,255,255,0.1)',
+  cardShadow: '0 1px 3px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.06)',
   inputBg: '#111',
-  inputBorder: 'rgba(255,255,255,0.1)',
-  btnBg: '#111',
-  btnBorder: 'rgba(255,255,255,0.1)',
+  inputBorder: 'rgba(255,255,255,0.15)',
+  btnBg: '#161616',
+  btnBorder: 'rgba(255,255,255,0.15)',
   btnActiveBg: '#fff',
   btnActiveText: '#000',
-  filterBg: '#111',
+  filterBg: '#1e1e1e',
   filterText: '#888',
-  contentBg: '#0a0a0a',
-  contentShadow: '0 1px 3px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04)',
+  contentBg: '#141414',
+  contentShadow: '0 1px 3px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.06)',
   modalBg: '#111',
-  modalShadow: '0 24px 48px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.06)',
+  modalShadow: '0 24px 48px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.08)',
   modalOverlay: 'rgba(0,0,0,0.6)',
   badgeDefaultBg: 'rgba(255,255,255,0.08)',
   badgeDefaultText: '#888',
   codeBlockBg: '#000',
-  tagBorder: 'rgba(255,255,255,0.08)',
+  tagBorder: 'rgba(255,255,255,0.1)',
   tagText: '#888',
-  fileBg: '#0a0a0a',
-  fileBorder: 'rgba(255,255,255,0.04)',
+  fileBg: '#1a1a1a',
+  fileBorder: 'rgba(255,255,255,0.15)',
   scrollHover: 'rgba(255,255,255,0.2)',
   cardEmpty: '#1a1a1a',
   fontFamily: "'Inter', 'PingFang SC', sans-serif",
@@ -256,7 +259,7 @@ function DraggablePanel({ width = 420, height = '70vh', theme: t, children, onCl
           cursor: dragging ? 'grabbing' : 'grab', flexShrink: 0,
         }}
       >
-        <h3 style={{ margin: 0, fontSize: 15, fontFamily: t.headingFamily, fontWeight: t.mode === 'dark' ? 400 : 600 }}>
+        <h3 style={{ margin: 0, fontSize: 15, fontFamily: t.headingFamily, fontWeight: 600 }}>
           {title}
         </h3>
         <button onClick={onClose} style={{
@@ -285,6 +288,95 @@ function App() {
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<WallpaperInfo | null>(null)
 
+  // 面板动画状态
+  const [panelVisible, setPanelVisible] = useState(false)
+  const [panelWp, setPanelWp] = useState<WallpaperInfo | null>(null)
+  const [panelContentReady, setPanelContentReady] = useState(false)
+  const panelTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+
+  // FLIP 动画状态（网格卡片平滑滑动到新位置）
+  const gridRef = useRef<HTMLDivElement>(null)
+  const flipAnimsRef = useRef<Animation[]>([])
+  const flipTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+
+  // 当 selected 变化时控制动画
+  useEffect(() => {
+    clearTimeout(panelTimerRef.current)
+    clearTimeout(flipTimerRef.current)
+    // 取消正在进行的 FLIP 动画
+    flipAnimsRef.current.forEach(a => a.cancel())
+    flipAnimsRef.current = []
+
+    if (selected) {
+      const isOpening = !panelVisible
+      if (isOpening) {
+        // === 打开面板：FLIP 动画 ===
+        // 1. First：记录卡片当前位置
+        const firstMap = new Map<string, { x: number; y: number }>()
+        gridRef.current?.querySelectorAll<HTMLElement>('[data-flip-id]').forEach(el => {
+          const r = el.getBoundingClientRect()
+          firstMap.set(el.dataset.flipId!, { x: r.left, y: r.top })
+        })
+        // 2. Last：布局瞬间变化（无 CSS transition）
+        setPanelWp(selected)
+        setPanelVisible(true)
+        // 3. 等 React 提交 + 浏览器布局后，执行 FLIP
+        flipTimerRef.current = setTimeout(() => {
+          const anims: Animation[] = []
+          gridRef.current?.querySelectorAll<HTMLElement>('[data-flip-id]').forEach(el => {
+            const first = firstMap.get(el.dataset.flipId!)
+            if (!first) return
+            const last = el.getBoundingClientRect()
+            const dx = first.x - last.left
+            const dy = first.y - last.top
+            if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return
+            anims.push(el.animate([
+              { transform: `translate(${dx}px, ${dy}px)`, opacity: 0.4 },
+              { transform: 'translate(0, 0)', opacity: 1 },
+            ], { duration: 450, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' }))
+          })
+          flipAnimsRef.current = anims
+          // 面板内容淡入
+          panelTimerRef.current = setTimeout(() => { setPanelContentReady(true) }, 140)
+        }, 1)
+      } else {
+        // === 切换壁纸（布局不变）===
+        setPanelContentReady(false)
+        setPanelWp(selected)
+        panelTimerRef.current = setTimeout(() => { setPanelContentReady(true) }, 150)
+      }
+    } else {
+      // === 关闭面板：FLIP 动画 ===
+      // 1. First：记录卡片当前位置
+      const firstMap = new Map<string, { x: number; y: number }>()
+      gridRef.current?.querySelectorAll<HTMLElement>('[data-flip-id]').forEach(el => {
+        const r = el.getBoundingClientRect()
+        firstMap.set(el.dataset.flipId!, { x: r.left, y: r.top })
+      })
+      // 2. Last：布局瞬间变化
+      setPanelContentReady(false)
+      setPanelVisible(false)
+      setPanelWp(null)
+      // 3. FLIP
+      flipTimerRef.current = setTimeout(() => {
+        const anims: Animation[] = []
+        gridRef.current?.querySelectorAll<HTMLElement>('[data-flip-id]').forEach(el => {
+          const first = firstMap.get(el.dataset.flipId!)
+          if (!first) return
+          const last = el.getBoundingClientRect()
+          const dx = first.x - last.left
+          const dy = first.y - last.top
+          if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return
+          anims.push(el.animate([
+            { transform: `translate(${dx}px, ${dy}px)`, opacity: 0.4 },
+            { transform: 'translate(0, 0)', opacity: 1 },
+          ], { duration: 450, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' }))
+        })
+        flipAnimsRef.current = anims
+      }, 1)
+    }
+  }, [selected])
+
   // 壁纸目录
   const [wallpaperDir, setWallpaperDir] = useState(() => localStorage.getItem('we-wallpaper-dir') || '')
   useEffect(() => { localStorage.setItem('we-wallpaper-dir', wallpaperDir) }, [wallpaperDir])
@@ -292,13 +384,22 @@ function App() {
   // 提取
   const [useCustomOutput, setUseCustomOutput] = useState(() => localStorage.getItem('we-use-custom-output') === 'true')
   const [outputDir, setOutputDir] = useState(() => localStorage.getItem('we-output-dir') || '')
+  const [desktopPath, setDesktopPath] = useState('')
+  // 默认输出路径 = 桌面/Wallpeel_Output
+  const defaultOutputDir = desktopPath ? `${desktopPath}\\Wallpeel_Output` : ''
+
+  // 获取桌面路径
+  useEffect(() => {
+    window.wallpeel.getDesktopPath().then((p: string) => setDesktopPath(p))
+  }, [])
+
   useEffect(() => { localStorage.setItem('we-use-custom-output', String(useCustomOutput)) }, [useCustomOutput])
   useEffect(() => { localStorage.setItem('we-output-dir', outputDir) }, [outputDir])
   const [isRunning, setIsRunning] = useState(false)
   const [extractStatus, setExtractStatus] = useState('')
   const [files, setFiles] = useState<ExtractedFile[]>([])
   const [_jobDir, setJobDir] = useState('')
-  const [logs, setLogs] = useState<string[]>([])
+  const [_logs, setLogs] = useState<string[]>([])
 
   // 过滤和多选
   const [activeFilter, setActiveFilter] = useState<'all' | 'video' | 'scene'>('all')
@@ -337,13 +438,23 @@ function App() {
   const handleContextMenu = (e: React.MouseEvent, wp: WallpaperInfo) => {
     e.preventDefault()
     setContextMenu({ x: e.clientX, y: e.clientY, wallpaper: wp })
+    setSelected(wp)  // 右键时同时切换到详情面板
   }
 
   // 主题
-  const [darkMode, setDarkMode] = useState(false)
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('we-dark-mode') === 'true')
   const baseTheme: Theme = darkMode ? darkTheme : lightTheme
   const selectedFont = FONT_OPTIONS.find((f) => f.key === headingFont) ?? FONT_OPTIONS[0]
   const t: Theme = { ...baseTheme, headingFamily: selectedFont.family }
+
+  // 根据主题切换 favicon
+  useEffect(() => {
+    const favicon = document.getElementById('favicon') as HTMLLinkElement
+    if (favicon) {
+      favicon.href = darkMode ? '/favicon-dark.svg' : '/favicon-light.svg'
+    }
+    localStorage.setItem('we-dark-mode', String(darkMode))
+  }, [darkMode])
 
   // 同步 body class（控制滚动条颜色）
   useEffect(() => {
@@ -361,7 +472,7 @@ function App() {
         // 如果没有保存的路径，自动搜索
         if (!wpDir) {
           addToast('正在自动搜索壁纸目录...', 'info')
-          const result = await window.weExtractor.autoFindWallpaperDir()
+          const result = await window.wallpeel.autoFindWallpaperDir()
           if (result.count > 0) {
             wpDir = result.paths[0]
             setWallpaperDir(wpDir)
@@ -376,7 +487,7 @@ function App() {
         if (cancelled) return
 
         // 扫描壁纸
-        const list = await window.weExtractor.scanWallpapers(wpDir)
+        const list = await window.wallpeel.scanWallpapers(wpDir)
         if (cancelled) return
         setWallpapers(list)
 
@@ -385,7 +496,7 @@ function App() {
           if (cancelled) return
           const batch = list.slice(i, i + BATCH)
           const results = await Promise.allSettled(
-            batch.map((wp) => window.weExtractor.getPreviewImage(wp.filePath))
+            batch.map((wp) => window.wallpeel.getPreviewImage(wp.filePath))
           )
           if (cancelled) return
           setPreviewMap((prev) => {
@@ -445,18 +556,42 @@ function App() {
   }, [])
 
   const handleExtract = async () => {
+    // 多选模式且选中多个时，自动切换到批量提取
+    if (multiSelectMode && selectedIds.size > 1) {
+      await handleBatchExtractPKG()
+      return
+    }
+
     if (!selected) return
-    const out = (useCustomOutput && outputDir) ? outputDir : 'C:\\Users\\31930\\Desktop\\WE_Extractor_Output'
+
+    // 检查是否有 PKG 文件
+    if (!selected.hasPKG) {
+      setExtractStatus('未识别到pkg文件')
+      addToast('未识别到pkg文件', 'info')
+      // 2秒后自动清除状态
+      setTimeout(() => { setExtractStatus('') }, 2000)
+      return
+    }
+
+    const out = (useCustomOutput && outputDir) ? outputDir : defaultOutputDir
     setIsRunning(true)
     setExtractStatus('正在提取...')
     setFiles([])
     setLogs([])
     setJobDir('')
-    window.weExtractor.onExtractLog((log) => addLog(log))
+    window.wallpeel.onExtractLog((log) => addLog(log))
     try {
-      const result = await window.weExtractor.startExtract({ inputPath: selected.filePath, outputDir: out })
+      const result = await window.wallpeel.startExtract({ inputPath: selected.filePath, outputDir: out })
       setJobDir(result.outputDir)
       setFiles(result.files)
+
+      // 如果启用了删除冗余文件，清理壁纸目录
+      if (autoCleanup) {
+        setExtractStatus('正在清理冗余文件...')
+        const wpDir = selected.filePath.substring(0, selected.filePath.lastIndexOf('\\'))
+        await window.wallpeel.cleanupWallpaperDir(wpDir)
+      }
+
       setExtractStatus('提取完成')
       addToast(`提取完成，共 ${result.files.length} 个文件`, 'success')
     } catch (err) {
@@ -507,14 +642,14 @@ function App() {
   }), [selectedWallpapers])
 
   const handleBatchCopyMP4 = async () => {
-    const out = (useCustomOutput && outputDir) ? outputDir : 'C:\\Users\\31930\\Desktop\\WE_Extractor_Output'
+    const out = (useCustomOutput && outputDir) ? outputDir : defaultOutputDir
     const filesToCopy = selectedWallpapers.filter((w) => w.hasMP4).map((w) => ({
       source: w.mp4Path,
       target: w.title + '\\' + w.mp4Path.split('\\').pop()
     }))
     if (!filesToCopy.length) return
     try {
-      await window.weExtractor.batchCopy({ files: filesToCopy, outputDir: out })
+      await window.wallpeel.batchCopy({ files: filesToCopy, outputDir: out })
       addToast(`${filesToCopy.length} 个 MP4 复制完成`, 'success')
     } catch (err) {
       addToast('MP4 复制失败', 'error')
@@ -523,14 +658,14 @@ function App() {
   }
 
   const handleBatchCopyPNG = async () => {
-    const out = (useCustomOutput && outputDir) ? outputDir : 'C:\\Users\\31930\\Desktop\\WE_Extractor_Output'
+    const out = (useCustomOutput && outputDir) ? outputDir : defaultOutputDir
     const filesToCopy = selectedWallpapers.filter((w) => w.hasPNG).map((w) => ({
       source: w.pngPath,
       target: w.title + '\\' + w.pngPath.split('\\').pop()
     }))
     if (!filesToCopy.length) return
     try {
-      await window.weExtractor.batchCopy({ files: filesToCopy, outputDir: out })
+      await window.wallpeel.batchCopy({ files: filesToCopy, outputDir: out })
       addToast(`${filesToCopy.length} 张图片复制完成`, 'success')
     } catch (err) {
       addToast('图片复制失败', 'error')
@@ -539,12 +674,40 @@ function App() {
   }
 
   const handleBatchExtractPKG = async () => {
-    const out = (useCustomOutput && outputDir) ? outputDir : 'C:\\Users\\31930\\Desktop\\WE_Extractor_Output'
+    const out = (useCustomOutput && outputDir) ? outputDir : defaultOutputDir
     const pkgs = selectedWallpapers.filter((w) => w.needsExtraction).map((w) => ({ id: w.id, pkgPath: w.pkgPath, title: w.title }))
     if (!pkgs.length) return
+
+    // 监听单个壁纸提取进度
+    let successCount = 0
+    let failCount = 0
+    window.wallpeel.onBatchExtractProgress((data) => {
+      if (data.success) {
+        successCount++
+        addToast(`✓ ${data.title} 提取成功`, 'success')
+      } else {
+        failCount++
+        addToast(`✕ ${data.title} 提取失败`, 'error')
+      }
+    })
+
     try {
-      await window.weExtractor.batchExtractPKG({ wallpapers: pkgs, outputDir: out })
-      addToast(`${pkgs.length} 个 PKG 提取完成`, 'success')
+      await window.wallpeel.batchExtractPKG({ wallpapers: pkgs, outputDir: out })
+
+      // 如果启用了删除冗余文件，清理壁纸目录
+      if (autoCleanup) {
+        for (const pkg of pkgs) {
+          try {
+            const wpDir = pkg.pkgPath.substring(0, pkg.pkgPath.lastIndexOf('\\'))
+            await window.wallpeel.cleanupWallpaperDir(wpDir)
+          } catch (e) {
+            console.warn('清理失败:', e)
+          }
+        }
+      }
+
+      // 显示总结
+      addToast(`批量提取完成：共 ${pkgs.length} 个，成功 ${successCount} 个，失败 ${failCount} 个`, 'success')
     } catch (err) {
       addToast('PKG 提取失败', 'error')
       console.error(err)
@@ -552,15 +715,9 @@ function App() {
   }
 
   const handleBatchOpenDir = async () => {
-    if (useCustomOutput && outputDir) {
-      await window.weExtractor.openPath(outputDir)
-    } else {
-      // 未设置复制路径，打开第一个选中壁纸的自身目录
-      const first = selectedWallpapers[0]
-      if (first) {
-        const wpDir = first.filePath.substring(0, first.filePath.lastIndexOf('\\'))
-        await window.weExtractor.openPath(wpDir)
-      }
+    const targetDir = (useCustomOutput && outputDir) ? outputDir : defaultOutputDir
+    if (targetDir) {
+      await window.wallpeel.openPath(targetDir)
     }
   }
 
@@ -569,25 +726,22 @@ function App() {
   // ==========================================
 
   return (
-    <div className={darkMode ? 'dot-grid' : 'dot-grid'} style={{
+    <div id="app-root" className={darkMode ? 'dot-grid' : 'dot-grid'} style={{
       height: '100vh', display: 'flex', flexDirection: 'column', position: 'relative',
-      background: t.bg, color: t.text, fontFamily: t.fontFamily,
+      background: t.bg, color: t.text, fontFamily: t.headingFamily,
       transition: 'background 0.3s, color 0.3s',
     }}>
       {/* ---- 顶部栏 ---- */}
       <header style={{
         height: 48, flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px 0 20px', gap: 12, margin: '8px 8px 0 8px', borderRadius: 12,
-        border: `1px solid ${t.border}`, background: t.headerBg,
-        backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
+        border: `1px solid ${t.mode === 'dark' ? 'rgba(255,255,255,0.15)' : t.border}`, background: t.mode === 'dark' ? 'rgba(10,10,10,0.95)' : 'rgba(255,255,255,0.92)',
         WebkitAppRegion: 'drag', userSelect: 'none', position: 'relative', zIndex: 2,
         transition: 'background 0.3s, border-color 0.3s',
       } as React.CSSProperties}>
         {/* 品牌 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ width: 26, height: 26, borderRadius: 6, background: darkMode ? '#fff' : '#111', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.3s' }}>
-            <ImageIcon size={14} color={darkMode ? '#000' : '#fff'} />
-          </div>
-          <span style={{ fontSize: 13, fontWeight: 600, letterSpacing: darkMode ? '2px' : '-0.01em', textTransform: darkMode ? 'uppercase' : 'none', transition: 'letter-spacing 0.3s' }}>WE Extractor</span>
+          <img src={darkMode ? '/favicon-dark.svg' : '/favicon-light.svg'} alt="Wallpeel" style={{ width: 42, height: 42, borderRadius: 10 }} />
+          <span style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em', transition: 'letter-spacing 0.3s' }}>Wallpeel</span>
         </div>
 
         {/* 弹性占位，把右侧组件推到右边 */}
@@ -600,7 +754,7 @@ function App() {
             width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
             borderRadius: 8, border: `1px solid ${t.btnBorder}`,
             background: showSettings ? t.btnActiveBg : t.btnBg,
-            color: showSettings ? t.btnActiveText : t.textSecondary,
+            color: showSettings ? t.btnActiveText : t.text,
             cursor: 'pointer', transition: 'all 0.2s',
             WebkitAppRegion: 'no-drag',
           } as React.CSSProperties}
@@ -614,7 +768,7 @@ function App() {
           style={{
             width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
             borderRadius: 8, border: `1px solid ${t.btnBorder}`, background: t.btnBg,
-            color: t.textSecondary, cursor: 'pointer', transition: 'all 0.2s',
+            color: t.text, cursor: 'pointer', transition: 'all 0.2s',
             WebkitAppRegion: 'no-drag',
           } as React.CSSProperties}
         >
@@ -627,7 +781,7 @@ function App() {
           style={{
             display: 'inline-flex', alignItems: 'center', gap: 5,
             padding: '5px 12px', borderRadius: 8, fontSize: 12, fontWeight: 500,
-            border: `1px solid ${t.btnBorder}`, background: t.btnBg, color: t.textSecondary,
+            border: `1px solid ${t.btnBorder}`, background: t.btnBg, color: t.text,
             cursor: 'pointer', transition: 'all 0.2s',
             WebkitAppRegion: 'no-drag',
           } as React.CSSProperties}
@@ -643,7 +797,7 @@ function App() {
             padding: '5px 12px', borderRadius: 8, fontSize: 12, fontWeight: 500,
             border: `1px solid ${t.btnBorder}`,
             background: multiSelectMode ? t.btnActiveBg : t.btnBg,
-            color: multiSelectMode ? t.btnActiveText : t.textSecondary,
+            color: multiSelectMode ? t.btnActiveText : t.text,
             cursor: 'pointer', transition: 'all 0.2s',
             WebkitAppRegion: 'no-drag',
           } as React.CSSProperties}
@@ -654,42 +808,42 @@ function App() {
 
         {multiSelectMode && (
           <>
-            <button onClick={selectAll} style={{ padding: '5px 10px', borderRadius: 6, fontSize: 11, border: `1px solid ${t.border}`, background: t.btnBg, color: t.textSecondary, cursor: 'pointer', WebkitAppRegion: 'no-drag', transition: 'all 0.2s' } as React.CSSProperties}>
+            <button onClick={selectAll} style={{ padding: '5px 10px', borderRadius: 6, fontSize: 11, fontWeight: 500, border: `1px solid ${t.border}`, background: t.btnBg, color: t.text, cursor: 'pointer', WebkitAppRegion: 'no-drag', transition: 'all 0.2s' } as React.CSSProperties}>
               全选
             </button>
-            <button onClick={deselectAll} style={{ padding: '5px 10px', borderRadius: 6, fontSize: 11, border: `1px solid ${t.border}`, background: t.btnBg, color: t.textSecondary, cursor: 'pointer', WebkitAppRegion: 'no-drag', transition: 'all 0.2s' } as React.CSSProperties}>
+            <button onClick={deselectAll} style={{ padding: '5px 10px', borderRadius: 6, fontSize: 11, fontWeight: 500, border: `1px solid ${t.border}`, background: t.btnBg, color: t.text, cursor: 'pointer', WebkitAppRegion: 'no-drag', transition: 'all 0.2s' } as React.CSSProperties}>
               取消
             </button>
           </>
         )}
 
-        <span style={{ fontSize: 11, color: t.textTertiary, flexShrink: 0, minWidth: 60, textAlign: 'right', transition: 'color 0.3s' }}>
+        <span style={{ fontSize: 11, fontWeight: 500, color: t.textTertiary, flexShrink: 0, minWidth: 60, textAlign: 'right', transition: 'color 0.3s' }}>
           {loading ? '加载中...' : `${filtered.length} 个壁纸`}
         </span>
 
         {/* 窗口控制 */}
         <div style={{ display: 'flex', alignItems: 'center', marginLeft: 8, WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           <button
-            onClick={() => window.weExtractor.windowMinimize()}
-            style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none', background: 'transparent', cursor: 'pointer', color: t.textSecondary, borderRadius: 6, transition: 'background 0.15s' }}
+            onClick={() => window.wallpeel.windowMinimize()}
+            style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none', background: 'transparent', cursor: 'pointer', color: t.text, borderRadius: 6, transition: 'background 0.15s' }}
             onMouseEnter={(e) => { e.currentTarget.style.background = darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' }}
             onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
           >
             <Minus size={14} />
           </button>
           <button
-            onClick={() => window.weExtractor.windowMaximize()}
-            style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none', background: 'transparent', cursor: 'pointer', color: t.textSecondary, borderRadius: 6, transition: 'background 0.15s' }}
+            onClick={() => window.wallpeel.windowMaximize()}
+            style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none', background: 'transparent', cursor: 'pointer', color: t.text, borderRadius: 6, transition: 'background 0.15s' }}
             onMouseEnter={(e) => { e.currentTarget.style.background = darkMode ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' }}
             onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent' }}
           >
             <Square size={11} />
           </button>
           <button
-            onClick={() => window.weExtractor.windowClose()}
-            style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none', background: 'transparent', cursor: 'pointer', color: t.textSecondary, borderRadius: 6, transition: 'background 0.15s, color 0.15s' }}
+            onClick={() => window.wallpeel.windowClose()}
+            style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none', background: 'transparent', cursor: 'pointer', color: t.text, borderRadius: 6, transition: 'background 0.15s, color 0.15s' }}
             onMouseEnter={(e) => { e.currentTarget.style.background = '#e81123'; e.currentTarget.style.color = '#fff' }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = t.textSecondary }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = t.text }}
           >
             <X size={14} />
           </button>
@@ -700,12 +854,12 @@ function App() {
       <div style={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
         {/* 左侧网格区 */}
         <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', padding: '0 8px 8px 8px', position: 'relative', zIndex: 1 }}>
-          <div style={{
+          <div ref={gridRef} style={{
             height: '100%', display: 'flex', flexDirection: 'column', gap: 8, padding: '8px 0 0 0',
             transition: 'background 0.3s, box-shadow 0.3s',
           }}>
             {/* 过滤栏 + 批量操作 */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 14px', borderRadius: 12, background: t.contentBg, boxShadow: t.contentShadow, flexShrink: 0, transition: 'background 0.3s, box-shadow 0.3s' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 14px', borderRadius: 12, background: t.contentBg, border: `1px solid ${t.mode === 'dark' ? 'rgba(255,255,255,0.1)' : 'transparent'}`, boxShadow: t.contentShadow, flexShrink: 0, transition: 'background 0.3s, box-shadow 0.3s, border-color 0.3s' }}>
               {([
                 { key: 'all' as const, label: '全部', count: filterCounts.all },
                 { key: 'video' as const, label: '视频壁纸', count: filterCounts.video },
@@ -716,10 +870,10 @@ function App() {
                   onClick={() => setActiveFilter(f.key)}
                   style={{
                     display: 'inline-flex', alignItems: 'center', gap: 5,
-                    padding: '5px 14px', borderRadius: 20, fontSize: 12, fontWeight: 500,
-                    border: 'none', cursor: 'pointer', transition: 'all 0.2s',
+                    padding: '5px 14px', borderRadius: 20, fontSize: 12, fontWeight: 500, fontFamily: t.headingFamily,
+                    border: activeFilter === f.key ? 'none' : `1px solid ${t.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'transparent'}`, cursor: 'pointer', transition: 'all 0.2s',
                     background: activeFilter === f.key ? t.btnActiveBg : t.filterBg,
-                    color: activeFilter === f.key ? t.btnActiveText : t.filterText,
+                    color: activeFilter === f.key ? t.btnActiveText : t.text,
                   }}
                 >
                   {f.label}
@@ -731,7 +885,7 @@ function App() {
 
               {/* 搜索框 */}
               <div style={{ position: 'relative', width: 200 }}>
-                <Search size={13} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: t.textTertiary, pointerEvents: 'none' }} />
+                <Search size={13} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: t.text, pointerEvents: 'none' }} />
                 <input
                   type="text"
                   placeholder="搜索壁纸..."
@@ -749,31 +903,33 @@ function App() {
 
               {multiSelectMode && selectedIds.size > 0 && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
-                  <span style={{ fontSize: 11, color: t.textSecondary, whiteSpace: 'nowrap' }}>
+                  <span style={{ fontSize: 11, color: t.text, whiteSpace: 'nowrap' }}>
                     已选 <strong style={{ color: t.text, fontWeight: 600 }}>{selectedIds.size}</strong> 个
                   </span>
                   <div style={{ width: 1, height: 16, background: t.border }} />
 
                   {batchStats.hasMP4 && (
-                    <button onClick={handleBatchCopyMP4} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 500, border: `1px solid ${t.btnBorder}`, background: t.btnBg, color: t.text, cursor: 'pointer', transition: 'all 0.2s' }}>
+                    <button onClick={handleBatchCopyMP4} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 500, fontFamily: t.headingFamily, border: `1px solid ${t.btnBorder}`, background: t.btnBg, color: t.text, cursor: 'pointer', transition: 'all 0.2s' }}>
                       <FileVideo size={12} /> 复制 MP4
                     </button>
                   )}
                   {batchStats.hasPNG && (
-                    <button onClick={handleBatchCopyPNG} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 500, border: `1px solid ${t.btnBorder}`, background: t.btnBg, color: t.text, cursor: 'pointer', transition: 'all 0.2s' }}>
+                    <button onClick={handleBatchCopyPNG} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 500, fontFamily: t.headingFamily, border: `1px solid ${t.btnBorder}`, background: t.btnBg, color: t.text, cursor: 'pointer', transition: 'all 0.2s' }}>
                       <FileImage size={12} /> 复制图片
                     </button>
                   )}
                   {batchStats.needsExtraction && (
-                    <button onClick={handleBatchExtractPKG} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 500, background: t.btnActiveBg, color: t.btnActiveText, border: 'none', cursor: 'pointer', transition: 'all 0.2s' }}>
+                    <button onClick={handleBatchExtractPKG} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 500, fontFamily: t.headingFamily, background: t.btnActiveBg, color: t.btnActiveText, border: 'none', cursor: 'pointer', transition: 'all 0.2s' }}>
                       <Package size={12} /> 提取 PKG
                     </button>
                   )}
-                  <button onClick={handleBatchOpenDir} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 500, border: `1px solid ${t.btnBorder}`, background: t.btnBg, color: t.text, cursor: 'pointer', transition: 'all 0.2s' }}>
-                    <ExternalLink size={12} /> 输出目录
-                  </button>
                 </div>
               )}
+
+              {/* 输出目录 — 常显 */}
+              <button onClick={handleBatchOpenDir} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '5px 12px', borderRadius: 8, fontSize: 11, fontWeight: 500, fontFamily: t.headingFamily, border: `1px solid ${t.btnBorder}`, background: t.btnBg, color: t.text, cursor: 'pointer', transition: 'all 0.2s', marginLeft: (multiSelectMode && selectedIds.size > 0) ? 0 : 'auto' }}>
+                <ExternalLink size={12} /> 输出目录
+              </button>
             </div>
 
             <div style={{ flex: 1, minHeight: 0, borderRadius: 12, background: t.contentBg, boxShadow: t.contentShadow, overflowY: 'auto', transition: 'background 0.3s, box-shadow 0.3s' }}>
@@ -784,7 +940,7 @@ function App() {
               </div>
             ) : filtered.length === 0 ? (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: t.textTertiary }}>
-                <p style={{ fontSize: 16, fontFamily: t.headingFamily, fontWeight: t.mode === 'dark' ? 400 : 500, letterSpacing: '0.5px' }}>
+                <p style={{ fontSize: 16, fontFamily: t.headingFamily, fontWeight: 500, letterSpacing: '0.5px' }}>
                   {wallpapers.length === 0
                     ? '请前往设置中设置 Wallpaper 文件路径'
                     : '没有匹配的壁纸'}
@@ -812,22 +968,33 @@ function App() {
         </div>
 
         {/* 右侧详情面板 */}
-        {selected && (
-          <DetailPanel
-            wallpaper={selected}
-            previewSrc={previewMap[selected.id] ?? null}
-            outputDir={(useCustomOutput && outputDir) ? outputDir : 'C:\\Users\\31930\\Desktop\\WE_Extractor_Output'}
-            isRunning={isRunning}
-            extractStatus={extractStatus}
-            files={files}
-            logs={logs}
-            stats={stats}
-            theme={t}
-            onClose={() => { setSelected(null); setFiles([]); setLogs([]); setJobDir(''); setExtractStatus('') }}
-            onExtract={handleExtract}
-            onToast={addToast}
-          />
-        )}
+        <div style={{
+          width: panelVisible ? 340 : 0,
+          opacity: panelContentReady ? 1 : 0,
+          transform: panelContentReady ? 'translateY(0)' : 'translateY(8px)',
+          flexShrink: 0,
+          overflow: 'hidden',
+          margin: panelVisible ? '8px 8px 8px 0' : '8px 0 8px 0',
+          transition: 'opacity 0.18s ease, transform 0.18s ease',
+        }}>
+          {panelWp && (
+            <DetailPanel
+              wallpaper={panelWp}
+              previewSrc={previewMap[panelWp.id] ?? null}
+              outputDir={(useCustomOutput && outputDir) ? outputDir : defaultOutputDir}
+              isRunning={isRunning}
+              extractStatus={extractStatus}
+              files={files}
+              stats={stats}
+              theme={t}
+              onClose={() => { setSelected(null); setFiles([]); setLogs([]); setJobDir(''); setExtractStatus('') }}
+              onExtract={handleExtract}
+              onToast={addToast}
+              multiSelectMode={multiSelectMode}
+              selectedCount={selectedIds.size}
+            />
+          )}
+        </div>
 
         {/* 右键菜单 */}
         {contextMenu && (
@@ -838,7 +1005,7 @@ function App() {
             theme={t}
             onClose={() => setContextMenu(null)}
             onViewDetail={(wp) => setSelected(wp)}
-            onOpenDir={(fp) => window.weExtractor.openWallpaperDir(fp)}
+            onOpenDir={(fp) => window.wallpeel.openWallpaperDir(fp)}
             onEnterMultiSelect={(id) => {
               if (!multiSelectMode) setMultiSelectMode(true)
               toggleSelect(id)
@@ -865,7 +1032,7 @@ function App() {
                         padding: '7px 10px', fontSize: 12, outline: 'none', color: t.text, transition: 'border-color 0.15s',
                       }}
                     />
-                    <button onClick={async () => { const d = await window.weExtractor.selectFolder(); if (d) setWallpaperDir(d) }} style={{
+                    <button onClick={async () => { const d = await window.wallpeel.selectFolder(); if (d) setWallpaperDir(d) }} style={{
                       display: 'inline-flex', alignItems: 'center', gap: 5, padding: '7px 14px', borderRadius: 8, fontSize: 12, fontWeight: 500,
                       border: `1px solid ${t.btnBorder}`, background: t.btnBg, color: t.text, cursor: 'pointer', transition: 'all 0.15s',
                     }}>
@@ -873,7 +1040,7 @@ function App() {
                     </button>
                     <button onClick={async () => {
                       addToast('正在自动搜索壁纸目录...', 'info')
-                      const result = await window.weExtractor.autoFindWallpaperDir()
+                      const result = await window.wallpeel.autoFindWallpaperDir()
                       if (result.count > 0) {
                         setWallpaperDir(result.paths[0])
                         addToast(`找到壁纸目录：${result.paths[0]}`, 'success')
@@ -887,9 +1054,6 @@ function App() {
                       <Search size={13} /> 自动搜索
                     </button>
                   </div>
-                  {wallpaperDir && (
-                    <p style={{ fontSize: 10, color: t.textTertiary, margin: '4px 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{wallpaperDir}</p>
-                  )}
                 </div>
 
                 <div style={{ height: 1, background: t.border, margin: '0 0 20px' }} />
@@ -911,7 +1075,7 @@ function App() {
                       >
                         <span style={{ fontSize: 14, fontFamily: f.family, color: t.text, width: 90 }}>{f.label}</span>
                         <span style={{ fontSize: 10, color: t.textTertiary }}>{f.desc}</span>
-                        {headingFont === f.key && <CheckCircle2 size={12} color="#111" style={{ marginLeft: 'auto', flexShrink: 0 }} />}
+                        {headingFont === f.key && <CheckCircle2 size={12} color={t.mode === 'dark' ? '#fff' : '#111'} style={{ marginLeft: 'auto', flexShrink: 0 }} />}
                       </div>
                     ))}
                   </div>
@@ -935,12 +1099,12 @@ function App() {
                       onClick={() => setUseCustomOutput(!useCustomOutput)}
                       style={{
                         width: 40, height: 22, borderRadius: 11, cursor: 'pointer', flexShrink: 0,
-                        background: useCustomOutput ? '#111' : (t.mode === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'),
+                        background: useCustomOutput ? (t.mode === 'dark' ? '#fff' : '#111') : (t.mode === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'),
                         transition: 'background 0.2s', position: 'relative',
                       }}
                     >
                       <div style={{
-                        width: 18, height: 18, borderRadius: '50%', background: '#fff',
+                        width: 18, height: 18, borderRadius: '50%', background: useCustomOutput ? (t.mode === 'dark' ? '#111' : '#fff') : '#fff',
                         position: 'absolute', top: 2,
                         left: useCustomOutput ? 20 : 2,
                         transition: 'left 0.2s',
@@ -960,16 +1124,14 @@ function App() {
                           padding: '6px 10px', fontSize: 11, outline: 'none', color: t.text, transition: 'border-color 0.15s',
                         }}
                       />
-                      <button onClick={async () => { const d = await window.weExtractor.selectFolder(); if (d) setOutputDir(d) }} style={{
+                      <button onClick={async () => { const d = await window.wallpeel.selectFolder(); if (d) setOutputDir(d) }} style={{
                         display: 'inline-flex', alignItems: 'center', gap: 4, padding: '6px 10px', borderRadius: 8,
                         fontSize: 11, border: `1px solid ${t.btnBorder}`, background: t.btnBg, color: t.textSecondary, cursor: 'pointer',
                       }}>
                         <FolderOpen size={12} /> 浏览
                       </button>
                     </div>
-                    {outputDir && (
-                      <p style={{ fontSize: 10, color: t.textTertiary, margin: '4px 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{outputDir}</p>
-                    )}
+                    <p style={{ fontSize: 10, color: t.textTertiary, margin: '6px 0 0' }}>未指定路径时，默认输出到桌面的 Wallpaper_Output 文件夹</p>
                   </div>
                 </div>
 
@@ -990,12 +1152,12 @@ function App() {
                     onClick={() => setAutoCleanup(!autoCleanup)}
                     style={{
                       width: 40, height: 22, borderRadius: 11, cursor: 'pointer', flexShrink: 0,
-                      background: autoCleanup ? '#111' : (t.mode === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'),
+                      background: autoCleanup ? (t.mode === 'dark' ? '#fff' : '#111') : (t.mode === 'dark' ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)'),
                       transition: 'background 0.2s', position: 'relative',
                     }}
                   >
                     <div style={{
-                      width: 18, height: 18, borderRadius: '50%', background: '#fff',
+                      width: 18, height: 18, borderRadius: '50%', background: autoCleanup ? (t.mode === 'dark' ? '#111' : '#fff') : '#fff',
                       position: 'absolute', top: 2,
                       left: autoCleanup ? 20 : 2,
                       transition: 'left 0.2s',
@@ -1009,7 +1171,7 @@ function App() {
 
         {/* MPKG 管理弹窗 */}
         {showMPKG && (
-          <MPKGManager theme={t} onClose={() => setShowMPKG(false)} onToast={addToast} wallpaperDir={wallpaperDir} />
+          <MPKGManager theme={t} onClose={() => setShowMPKG(false)} onToast={addToast} wallpaperDir={wallpaperDir} useCustomOutput={useCustomOutput} outputDir={outputDir} defaultOutputDir={defaultOutputDir} autoCleanup={autoCleanup} />
         )}
 
         {/* Toast 通知弹窗 */}
@@ -1020,16 +1182,19 @@ function App() {
         }}>
           {toasts.map((toast) => {
             const icon = toast.type === 'success' ? '✓' : toast.type === 'error' ? '✕' : 'ℹ'
-            const accent = toast.type === 'success' ? '#4ade80'
-              : toast.type === 'error' ? '#f87171' : t.accent
+            const accent = toast.type === 'success'
+              ? (t.mode === 'dark' ? '#fff' : '#111')
+              : toast.type === 'error' ? '#f87171' : t.text
+            const iconColor = toast.type === 'success'
+              ? (t.mode === 'dark' ? '#111' : '#fff')
+              : '#fff'
             return (
               <div key={toast.id} className={toast.exiting ? 'toast-exit' : 'toast-enter'} style={{
                 pointerEvents: 'auto',
-                minWidth: 240, maxWidth: 360,
+                width: 360,
                 padding: '10px 16px',
                 borderRadius: 10,
-                background: t.mode === 'dark' ? 'rgba(30,30,35,0.92)' : 'rgba(255,255,255,0.92)',
-                backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)',
+                background: t.mode === 'dark' ? 'rgba(24,24,28,0.96)' : 'rgba(255,255,255,0.96)',
                 border: `1px solid ${t.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'}`,
                 display: 'flex', alignItems: 'center', gap: 10,
                 boxShadow: t.mode === 'dark'
@@ -1038,12 +1203,12 @@ function App() {
               }}>
                 <span style={{
                   width: 22, height: 22, borderRadius: '50%', flexShrink: 0,
-                  background: accent, color: '#fff',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 12, fontWeight: 700,
+                  background: accent, color: iconColor,
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 11, fontWeight: 700, lineHeight: 1, paddingBottom: 1,
                 }}>{icon}</span>
                 <span style={{
-                  fontSize: 13, lineHeight: 1.5, color: t.textPrimary,
+                  fontSize: 13, lineHeight: 1.5, color: t.text,
                   wordBreak: 'break-all',
                 }}>{toast.message}</span>
               </div>
@@ -1075,6 +1240,7 @@ function GridCard({
 
   return (
     <div
+      data-flip-id={wp.id}
       onClick={onClick}
       onContextMenu={onContextMenu}
       style={{
@@ -1083,13 +1249,15 @@ function GridCard({
         outline: isChecked ? '2px solid #111' : 'none',
         outlineOffset: -2,
         transition: 'background 0.3s',
+        contain: 'size layout paint',
+        contentVisibility: 'auto',
       }}
     >
       {previewSrc ? (
         <img
           src={previewSrc}
           alt={wp.title}
-          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', transition: 'transform 0.4s ease' }}
+          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', transition: 'transform 0.4s ease', willChange: 'transform' }}
           onMouseEnter={(e) => { (e.target as HTMLElement).style.transform = 'scale(1.03)' }}
           onMouseLeave={(e) => { (e.target as HTMLElement).style.transform = 'scale(1)' }}
         />
@@ -1116,7 +1284,7 @@ function GridCard({
           color: '#fff', fontSize: 11, fontWeight: 500, lineHeight: 1.3, margin: 0, fontFamily: t.headingFamily,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', width: '100%',
           textShadow: '0 1px 3px rgba(0,0,0,0.4)',
-          letterSpacing: t.mode === 'dark' ? '0.5px' : '0',
+          letterSpacing: '0',
         }}>
           {wp.title}
         </p>
@@ -1160,8 +1328,8 @@ function GridCard({
 // ==========================================
 
 function DetailPanel({
-  wallpaper: wp, previewSrc, outputDir, isRunning, extractStatus, files, logs, stats, theme: t,
-  onClose, onExtract, onToast,
+  wallpaper: wp, previewSrc, outputDir, isRunning, extractStatus, files, stats, theme: t,
+  onClose, onExtract, onToast, multiSelectMode, selectedCount,
 }: {
   wallpaper: WallpaperInfo
   previewSrc: string | null
@@ -1169,12 +1337,13 @@ function DetailPanel({
   isRunning: boolean
   extractStatus: string
   files: ExtractedFile[]
-  logs: string[]
   stats: { videos: number; images: number; configs: number; sources: number }
   theme: Theme
   onClose: () => void
   onExtract: () => void
   onToast: (message: string, type: 'info' | 'success' | 'error') => void
+  multiSelectMode: boolean
+  selectedCount: number
 }) {
   const badge = TYPE_BADGE[wp.type.toLowerCase()] ?? { label: wp.type, bg: t.badgeDefaultBg, text: t.badgeDefaultText, icon: <FileArchive size={11} /> }
 
@@ -1189,7 +1358,7 @@ function DetailPanel({
   const handleCopyMP4 = async () => {
     if (!wp.hasMP4) return
     try {
-      await window.weExtractor.batchCopy({
+      await window.wallpeel.batchCopy({
         files: [{ source: wp.mp4Path, target: wp.title + '\\' + wp.mp4Path.split('\\').pop() }],
         outputDir: outputDir,
       })
@@ -1202,7 +1371,7 @@ function DetailPanel({
   const handleCopyPNG = async () => {
     if (!wp.hasPNG) return
     try {
-      await window.weExtractor.batchCopy({
+      await window.wallpeel.batchCopy({
         files: [{ source: wp.pngPath, target: wp.title + '\\' + wp.pngPath.split('\\').pop() }],
         outputDir: outputDir,
       })
@@ -1214,8 +1383,7 @@ function DetailPanel({
 
   const FilePill = ({ ok, label }: { ok: boolean; label: string }) => (
     <span style={{
-      padding: '2px 8px', borderRadius: 10, fontSize: 10, fontWeight: 500,
-      background: ok ? 'rgba(22,163,106,0.1)' : (t.mode === 'dark' ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)'),
+      fontSize: 12, fontWeight: 500,
       color: ok ? '#16a34a' : t.textTertiary,
     }}>
       {label}
@@ -1224,7 +1392,7 @@ function DetailPanel({
 
   return (
     <div style={{
-      width: 340, flexShrink: 0, height: '100%', display: 'flex', flexDirection: 'column', margin: '8px 8px 8px 0', borderRadius: 12,
+      width: '100%', height: '100%', display: 'flex', flexDirection: 'column', borderRadius: 12,
       border: `1px solid ${t.border}`, background: t.contentBg, boxShadow: t.contentShadow, overflow: 'hidden', transition: 'background 0.3s, border-color 0.3s',
     }}>
       {/* 头部：角标 + 关闭 */}
@@ -1247,11 +1415,11 @@ function DetailPanel({
       </div>
 
       {/* 大图 */}
-      <div style={{ margin: '12px 16px 0', borderRadius: 10, overflow: 'hidden', background: t.inputBg, transition: 'background 0.3s', flexShrink: 0, minHeight: 160 }}>
+      <div style={{ margin: '12px auto 0', width: 300, height: 300, borderRadius: 10, overflow: 'hidden', background: t.inputBg, transition: 'background 0.3s', flexShrink: 0 }}>
         {previewSrc ? (
-          <img src={previewSrc} alt={wp.title} style={{ width: '100%', display: 'block', maxHeight: 280, objectFit: 'contain' }} />
+          <img src={previewSrc} alt={wp.title} style={{ width: '100%', height: '100%', display: 'block', objectFit: 'cover' }} />
         ) : (
-          <div style={{ aspectRatio: '16/9', display: 'flex', alignItems: 'center', justifyContent: 'center', color: t.textMuted }}>
+          <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: t.textMuted }}>
             <ImageIcon size={36} strokeWidth={1} />
           </div>
         )}
@@ -1262,29 +1430,22 @@ function DetailPanel({
 
       {/* 信息 */}
       <div style={{ padding: '16px 16px 0' }}>
-        <h2 style={{ fontSize: 16, fontFamily: t.headingFamily, fontWeight: t.mode === 'dark' ? 400 : 600, letterSpacing: t.mode === 'dark' ? '0.5px' : '-0.02em', margin: 0, lineHeight: 1.3, transition: 'font-family 0.3s' }}>{wp.title}</h2>
-        {wp.tags.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
-            {wp.tags.map((tag) => (
-              <span key={tag} style={{ padding: '3px 10px', borderRadius: 20, border: `1px solid ${t.tagBorder}`, fontSize: 11, color: t.tagText, transition: 'all 0.2s' }}>{tag}</span>
-            ))}
-          </div>
-        )}
+        <h2 style={{ fontSize: 16, fontFamily: t.headingFamily, fontWeight: 600, letterSpacing: '-0.02em', margin: 0, lineHeight: 1.3, transition: 'font-family 0.3s' }}>{wp.title}</h2>
         <p style={{ fontSize: 11, color: t.textTertiary, marginTop: 8, transition: 'color 0.3s' }}>ID: {wp.id} · {formatSize(wp.fileSize)}</p>
       </div>
 
       {/* 文件信息 */}
-      <div style={{ margin: '16px 16px 0', padding: 12, borderRadius: 10, background: t.fileBg, border: `1px solid ${t.fileBorder}`, transition: 'all 0.3s' }}>
-        <h4 style={{ fontSize: 11, color: t.textTertiary, letterSpacing: '1px', textTransform: 'uppercase', margin: '0 0 10px', fontWeight: 500 }}>文件信息</h4>
+      <div style={{ margin: '16px 16px 0', padding: '16px 18px', borderRadius: 12, background: t.mode === 'dark' ? 'linear-gradient(135deg, rgba(255,255,255,0.16), rgba(255,255,255,0.08))' : 'linear-gradient(135deg, rgba(255,255,255,0.85), rgba(250,250,252,0.6))', backdropFilter: 'blur(12px) saturate(1.4)', WebkitBackdropFilter: 'blur(12px) saturate(1.4)', border: `1px solid ${t.mode === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.07)'}`, boxShadow: t.mode === 'dark' ? 'inset 0 0.5px 0 rgba(255,255,255,0.06)' : '0 2px 12px rgba(0,0,0,0.05), inset 0 0.5px 0 rgba(255,255,255,0.7)', transition: 'all 0.3s' }}>
+        <h4 style={{ fontSize: 10, color: t.textTertiary, letterSpacing: '1.5px', textTransform: 'uppercase', margin: '0 0 10px', fontWeight: 600 }}>文件信息</h4>
         {[
           { label: 'MP4 视频', ok: wp.hasMP4, text: wp.hasMP4 ? formatSize(wp.mp4Size) : '无' },
           { label: 'PKG 包', ok: wp.hasPKG, text: wp.hasPKG ? formatSize(wp.pkgSize) : '无' },
           { label: 'MPKG 包', ok: wp.hasMPKG, text: wp.hasMPKG ? formatSize(wp.mpkgSize) : '无' },
           { label: 'PNG 图片', ok: wp.hasPNG, text: wp.hasPNG ? formatSize(wp.pngSize) : '无' },
           { label: '预览图', ok: wp.hasPreview, text: wp.hasPreview ? '有' : '无' },
-        ].map((row) => (
-          <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: `1px solid ${t.fileBorder}` }}>
-            <span style={{ fontSize: 11, color: t.textSecondary }}>{row.label}</span>
+        ].map((row, i, arr) => (
+          <div key={row.label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: i < arr.length - 1 ? `1px solid ${t.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.04)'}` : 'none' }}>
+            <span style={{ fontSize: 12, color: t.text, fontWeight: 500 }}>{row.label}</span>
             <FilePill ok={row.ok} label={row.text} />
           </div>
         ))}
@@ -1296,7 +1457,7 @@ function DetailPanel({
           onClick={onExtract}
           disabled={isRunning}
           style={{
-            width: '100%', padding: 10, borderRadius: 8, fontSize: 13, fontWeight: 500,
+            width: '100%', padding: 10, borderRadius: 12, fontSize: 13, fontWeight: 500,
             background: t.btnActiveBg, color: t.btnActiveText, border: 'none',
             cursor: 'pointer', transition: 'all 0.2s', letterSpacing: '0.5px',
             opacity: isRunning ? 0.5 : 1,
@@ -1304,22 +1465,22 @@ function DetailPanel({
           }}
         >
           {isRunning ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
-          {isRunning ? '提取中...' : '开始提取'}
+          {isRunning ? '提取中...' : (multiSelectMode && selectedCount > 1 ? `批量提取 (${selectedCount})` : '开始提取')}
         </button>
-        <button onClick={() => window.weExtractor.openWallpaperDir(wp.filePath)} style={{
-          width: '100%', padding: 8, borderRadius: 8, fontSize: 12, fontWeight: 400,
-          background: t.btnBg, color: t.text, border: `1px solid ${t.btnBorder}`,
+        <button onClick={() => window.wallpeel.openWallpaperDir(wp.previewPath || wp.filePath)} style={{
+          width: '100%', padding: 8, borderRadius: 12, fontSize: 12, fontWeight: 400,
+          background: 'transparent', color: t.text, border: `1px solid ${t.mode === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.07)'}`,
           cursor: 'pointer', transition: 'all 0.15s',
           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
         }}>
-          <ExternalLink size={12} /> 打开目录
+          <ExternalLink size={12} /> 壁纸目录
         </button>
         <div style={{ display: 'flex', gap: 8 }}>
           {wp.hasMP4 && (
             <button onClick={handleCopyMP4} style={{
               flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4,
-              padding: '8px 10px', borderRadius: 8, fontSize: 12, fontWeight: 500,
-              border: `1px solid ${t.btnBorder}`, background: t.btnBg, color: t.text,
+              padding: '8px 10px', borderRadius: 12, fontSize: 12, fontWeight: 500,
+              border: `1px solid ${t.mode === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.07)'}`, background: 'transparent', color: t.text,
               cursor: 'pointer', transition: 'all 0.15s',
             }}>
               <FileVideo size={12} /> 复制 MP4
@@ -1328,8 +1489,8 @@ function DetailPanel({
           {wp.hasPNG && (
             <button onClick={handleCopyPNG} style={{
               flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 4,
-              padding: '8px 10px', borderRadius: 8, fontSize: 12, fontWeight: 500,
-              border: `1px solid ${t.btnBorder}`, background: t.btnBg, color: t.text,
+              padding: '8px 10px', borderRadius: 12, fontSize: 12, fontWeight: 500,
+              border: `1px solid ${t.mode === 'dark' ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.07)'}`, background: 'transparent', color: t.text,
               cursor: 'pointer', transition: 'all 0.15s',
             }}>
               <FileImage size={12} /> 复制图片
@@ -1349,7 +1510,7 @@ function DetailPanel({
       {/* 提取结果 */}
       {files.length > 0 && (
         <div style={{ padding: '12px 16px 0' }}>
-          <h3 style={{ fontSize: 12, fontFamily: t.headingFamily, fontWeight: t.mode === 'dark' ? 400 : 600, margin: '0 0 8px' }}>提取结果</h3>
+          <h3 style={{ fontSize: 12, fontFamily: t.headingFamily, fontWeight: 600, margin: '0 0 8px' }}>提取结果</h3>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             <StatPill label="视频" count={stats.videos} color="#3b82f6" />
             <StatPill label="图片" count={stats.images} color="#16a34a" />
@@ -1427,7 +1588,7 @@ function ContextMenu({
     for (const ext of extensions) {
       const previewPath = wpDir + '\\' + ext
       try {
-        const result = await window.weExtractor.copyImageToClipboard(previewPath)
+        const result = await window.wallpeel.copyImageToClipboard(previewPath)
         if (result) {
           setCopied('preview')
           setTimeout(() => setCopied(null), 1500)
@@ -1491,8 +1652,9 @@ function ContextMenu({
 // MPKG 管理器
 // ==========================================
 
-function MPKGManager({ theme: t, onClose, onToast, wallpaperDir }: { theme: Theme; onClose: () => void; onToast: (msg: string, type: 'info' | 'success' | 'error') => void; wallpaperDir: string }) {
-  const [mpkgDir, setMpkgDir] = useState('')
+function MPKGManager({ theme: t, onClose, onToast, wallpaperDir, useCustomOutput, outputDir, defaultOutputDir, autoCleanup }: { theme: Theme; onClose: () => void; onToast: (msg: string, type: 'info' | 'success' | 'error') => void; wallpaperDir: string; useCustomOutput: boolean; outputDir: string; defaultOutputDir: string; autoCleanup: boolean }) {
+  const [mpkgDir, setMpkgDir] = useState(() => localStorage.getItem('we-mpkg-dir') || '')
+  useEffect(() => { localStorage.setItem('we-mpkg-dir', mpkgDir) }, [mpkgDir])
   const [scanResult, setScanResult] = useState<any>(null)
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(false)
@@ -1503,7 +1665,7 @@ function MPKGManager({ theme: t, onClose, onToast, wallpaperDir }: { theme: Them
     setActionStatus('')
     setLoading(true)
     try {
-      const result = await window.weExtractor.scanMPKG({
+      const result = await window.wallpeel.scanMPKG({
         mpkgDir, wallpaperDir: wallpaperDir || '',
       })
       setScanResult(result)
@@ -1523,8 +1685,8 @@ function MPKGManager({ theme: t, onClose, onToast, wallpaperDir }: { theme: Them
       .filter((f: any) => selectedFiles.has(f.mpkgFile))
       .map((f: any) => ({ mpkgPath: f.mpkgPath, targetDir: f.wpDir }))
     setActionStatus('正在复制...')
-    const res = await window.weExtractor.copyMPKG({ files })
-    setActionStatus(`复制完成: ${res.copied} 个，跳过 ${res.skipped} 个已存在`)
+    const res = await window.wallpeel.copyMPKG({ files })
+    setActionStatus(`复制完成: ${res.copied} 个`)
     onToast(`复制完成: ${res.copied} 个`, 'success')
   }
 
@@ -1534,8 +1696,23 @@ function MPKGManager({ theme: t, onClose, onToast, wallpaperDir }: { theme: Them
       .filter((f: any) => selectedFiles.has(f.mpkgFile))
       .map((f: any) => ({ mpkgPath: f.mpkgPath, wpDir: f.wpDir, wpTitle: f.wpTitle }))
     setActionStatus('正在解压提取...')
-    const res = await window.weExtractor.extractMPKG({ files, outputDir: '' })
+    // 使用设置中的输出路径（如果有启用）
+    const out = (useCustomOutput && outputDir) ? outputDir : defaultOutputDir
+    const res = await window.wallpeel.extractMPKG({ files, outputDir: out })
     const ok = res.results.filter((r: any) => r.success).length
+
+    // 如果启用了删除冗余文件，清理壁纸目录
+    if (autoCleanup) {
+      setActionStatus('正在清理冗余文件...')
+      for (const file of files) {
+        try {
+          await window.wallpeel.cleanupWallpaperDir(file.wpDir)
+        } catch (e) {
+          console.warn('清理失败:', e)
+        }
+      }
+    }
+
     setActionStatus(`提取完成: ${ok}/${res.results.length} 成功`)
     onToast(`提取完成: ${ok}/${res.results.length} 成功`, ok === res.results.length ? 'success' : 'info')
   }
@@ -1582,7 +1759,7 @@ function MPKGManager({ theme: t, onClose, onToast, wallpaperDir }: { theme: Them
             <label style={{ fontSize: 11, color: t.textTertiary, display: 'block', marginBottom: 6 }}>MPKG 目录</label>
             <div style={{ display: 'flex', gap: 8 }}>
               <input value={mpkgDir} onChange={(e) => setMpkgDir(e.target.value)} placeholder="选择 MPKG 文件所在目录..." style={inputStyle} />
-              <button onClick={async () => { const d = await window.weExtractor.selectFolder(); if (d) setMpkgDir(d) }} style={btnStyle}>
+              <button onClick={async () => { const d = await window.wallpeel.selectFolder(); if (d) setMpkgDir(d) }} style={btnStyle}>
                 <FolderOpen size={13} /> 浏览
               </button>
               <button onClick={handleScan} disabled={loading || !mpkgDir} style={primaryBtn}>
@@ -1630,7 +1807,7 @@ function MPKGManager({ theme: t, onClose, onToast, wallpaperDir }: { theme: Them
                     {f.alreadyHasMP4 && <span style={{ fontSize: 10, color: t.textTertiary, flexShrink: 0 }}>已有MP4</span>}
                     {f.matched && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); window.weExtractor.openWallpaperDir(f.wpDir) }}
+                        onClick={(e) => { e.stopPropagation(); window.wallpeel.openWallpaperDir(f.wpDir) }}
                         style={{
                           display: 'flex', alignItems: 'center', justifyContent: 'center',
                           width: 24, height: 24, borderRadius: 6, border: 'none',

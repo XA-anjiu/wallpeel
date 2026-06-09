@@ -1,5 +1,5 @@
 {
-  "name": "we-extractor-node",
+  "name": "wallpeel",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -9,8 +9,36 @@
     "dev:vite": "vite",
     "dev:electron": "wait-on http://localhost:5173 && electron .",
     "build": "tsc -b && vite build",
+    "pack": "npm run build && electron-builder --win",
     "lint": "eslint .",
     "preview": "vite preview"
+  },
+  "build": {
+    "appId": "com.wallpaper.extractor",
+    "productName": "Wallpeel",
+    "asar": false,
+    "directories": {
+      "output": "C:\\Users\\31930\\Desktop\\Wallpeel-Release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "tools/**/*",
+      "package.json"
+    ],
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Wallpeel",
+      "installerLanguages": [
+        "zh_CN",
+        "en_US"
+      ],
+      "language": "2052",
+      "include": "build/installer.nsh"
+    }
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -29,11 +57,13 @@
     "autoprefixer": "^10.5.0",
     "concurrently": "^10.0.3",
     "electron": "^42.3.3",
+    "electron-builder": "^26.15.2",
     "eslint": "^10.3.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.6.0",
     "postcss": "^8.5.15",
+    "sharp": "^0.34.5",
     "tailwindcss": "^4.3.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.59.2",

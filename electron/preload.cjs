@@ -1,10 +1,11 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
-contextBridge.exposeInMainWorld('weExtractor', {
+contextBridge.exposeInMainWorld('wallpeel', {
   // 原有接口
   selectFile: () => ipcRenderer.invoke('dialog:selectFile'),
   selectFolder: () => ipcRenderer.invoke('dialog:selectFolder'),
   openPath: (targetPath) => ipcRenderer.invoke('shell:openPath', targetPath),
+  getDesktopPath: () => ipcRenderer.invoke('shell:getDesktopPath'),
   startExtract: (payload) => ipcRenderer.invoke('extract:start', payload),
   onExtractLog: (callback) => {
     ipcRenderer.removeAllListeners('extract:log')
@@ -22,6 +23,10 @@ contextBridge.exposeInMainWorld('weExtractor', {
   // 批量操作
   batchCopy: (payload) => ipcRenderer.invoke('batch:copy', payload),
   batchExtractPKG: (payload) => ipcRenderer.invoke('batch:extractPKG', payload),
+  onBatchExtractProgress: (callback) => {
+    ipcRenderer.removeAllListeners('batch:extractProgress')
+    ipcRenderer.on('batch:extractProgress', (_event, data) => callback(data))
+  },
 
   // MPKG 管理
   scanMPKG: (payload) => ipcRenderer.invoke('mpkg:scan', payload),

@@ -1,6 +1,6 @@
 // @ts-nocheck
 // ============================================================
-// WE Extractor — 前端 ↔ 后端 API 接口规范
+// Wallpeel — 前端 ↔ 后端 API 接口规范
 //
 // 前端已完成，后端需实现以下接口。
 // 涉及两个文件：
@@ -103,7 +103,7 @@ interface ExtractedFile {
 //
 // const { contextBridge, ipcRenderer } = require('electron')
 //
-// contextBridge.exposeInMainWorld('weExtractor', {
+// contextBridge.exposeInMainWorld('wallpeel', {
 //   // ---- 已有（保持不变）----
 //   selectFolder: () => ipcRenderer.invoke('dialog:selectFolder'),
 //   openPath: (targetPath) => ipcRenderer.invoke('shell:openPath', targetPath),

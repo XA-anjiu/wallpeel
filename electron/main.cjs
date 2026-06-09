@@ -71,14 +71,80 @@ function extractMpkg(filePath, outputDir) {
 }
 
 /**
- * 自动搜索 Steam 库目录中的 Wallpaper Engine 壁纸路径
- * 返回找到的所有壁纸目录路径
+ * 从 Windows 注册表获取 Steam 安装路径
+ * 覆盖多种注册表位置：64位系统、32位系统、用户级别
+ * @returns {string|null} Steam 安装目录，失败返回 null
  */
-function findWallpaperDir() {
-  const wallpaperAppId = '431960'
-  const results = []
+function findSteamDirFromRegistry() {
+  const { execSync } = require('child_process')
 
-  // 常见的 Steam 安装路径
+  // 按优先级尝试不同的注册表路径
+  const registryPaths = [
+    'HKLM\\SOFTWARE\\WOW6432Node\\Valve\\Steam',  // 64位系统上的32位程序（最常见）
+    'HKLM\\SOFTWARE\\Valve\\Steam',                // 32位系统 或 直接安装
+    'HKCU\\SOFTWARE\\Valve\\Steam',                // 用户级别安装
+  ]
+
+  for (const regPath of registryPaths) {
+    try {
+      const result = execSync(
+        `reg query "${regPath}" /v InstallPath`,
+        { encoding: 'utf8', windowsHide: true, timeout: 5000 }
+      )
+
+      // 解析注册表输出，提取路径
+      const match = result.match(/InstallPath\s+REG_SZ\s+(.+)/)
+      if (match) {
+        const installDir = match[1].trim()
+        // 验证路径有效性
+        if (installDir && fs.existsSync(path.join(installDir, 'steam.exe'))) {
+          console.log(`[注册表] 找到 Steam: ${installDir}`)
+          return installDir
+        }
+      }
+    } catch {
+      // 该注册表路径不存在或无权限，继续尝试下一个
+    }
+  }
+
+  return null
+}
+
+/**
+ * 从运行中的 Steam 进程获取安装路径
+ * @returns {string|null} Steam 安装目录，失败返回 null
+ */
+function findSteamDirFromProcess() {
+  try {
+    const { execSync } = require('child_process')
+    const result = execSync(
+      'wmic process where "name=\'steam.exe\'" get ExecutablePath',
+      { encoding: 'utf8', windowsHide: true, timeout: 5000 }
+    )
+
+    // 解析输出，获取 exe 路径
+    const lines = result.split('\n').filter(l => l.trim() && !l.includes('ExecutablePath'))
+    for (const line of lines) {
+      const exePath = line.trim()
+      if (exePath && fs.existsSync(exePath)) {
+        const installDir = path.dirname(exePath)
+        console.log(`[进程] 找到 Steam: ${installDir}`)
+        return installDir
+      }
+    }
+  } catch {
+    // Steam 未运行或查询失败
+  }
+
+  return null
+}
+
+/**
+ * 从常见安装路径搜索 Steam
+ * @returns {string|null} Steam 安装目录，失败返回 null
+ */
+function findSteamDirFromCommonPaths() {
+  // 常见的 Steam 安装路径（按可能性排序）
   const commonSteamPaths = [
     'C:\\Program Files (x86)\\Steam',
     'C:\\Program Files\\Steam',
@@ -90,20 +156,56 @@ function findWallpaperDir() {
     'F:\\steam',
   ]
 
-  // 找到 Steam 安装目录
-  let steamDir = ''
   for (const p of commonSteamPaths) {
-    if (fs.existsSync(p) && fs.existsSync(path.join(p, 'steam.exe'))) {
-      steamDir = p
-      break
+    if (fs.existsSync(path.join(p, 'steam.exe'))) {
+      console.log(`[常见路径] 找到 Steam: ${p}`)
+      return p
     }
   }
 
+  return null
+}
+
+/**
+ * 多层 Fallback 查找 Steam 安装目录
+ * 优先级：注册表 → 常见路径 → 运行中的进程
+ * @returns {string|null} Steam 安装目录，失败返回 null
+ */
+function findSteamDir() {
+  // 第 1 步：从注册表获取（覆盖大多数标准安装）
+  let steamDir = findSteamDirFromRegistry()
+  if (steamDir) return steamDir
+
+  // 第 2 步：搜索常见路径（覆盖便携版和特殊安装）
+  steamDir = findSteamDirFromCommonPaths()
+  if (steamDir) return steamDir
+
+  // 第 3 步：从运行中的 Steam 进程获取（最后的手段）
+  steamDir = findSteamDirFromProcess()
+  if (steamDir) return steamDir
+
+  console.warn('[Steam] 未找到 Steam 安装目录')
+  return null
+}
+
+/**
+ * 自动搜索 Steam 库目录中的 Wallpaper Engine 壁纸路径
+ * 返回找到的所有壁纸目录路径
+ */
+function findWallpaperDir() {
+  const wallpaperAppId = '431960'
+  const results = []
+
+  // 使用多层 Fallback 查找 Steam 目录
+  const steamDir = findSteamDir()
   if (!steamDir) return results
 
-  // 读取 libraryfolders.vdf
+  // 读取 libraryfolders.vdf（包含所有 Steam 库路径）
   const vdfPath = path.join(steamDir, 'steamapps', 'libraryfolders.vdf')
-  if (!fs.existsSync(vdfPath)) return results
+  if (!fs.existsSync(vdfPath)) {
+    console.warn(`[Steam] 未找到 libraryfolders.vdf: ${vdfPath}`)
+    return results
+  }
 
   try {
     const vdfContent = fs.readFileSync(vdfPath, 'utf8')
@@ -119,11 +221,14 @@ function findWallpaperDir() {
       libraryPaths.push(libPath)
     }
 
+    console.log(`[Steam] 找到 ${libraryPaths.length} 个库路径`)
+
     // 在每个库路径下查找壁纸目录
     for (const libPath of libraryPaths) {
       const wpDir = path.join(libPath, 'steamapps', 'workshop', 'content', wallpaperAppId)
       if (fs.existsSync(wpDir)) {
         results.push(wpDir)
+        console.log(`[Steam] 找到壁纸目录: ${wpDir}`)
       }
     }
   } catch (err) {
@@ -174,8 +279,9 @@ function createWindow() {
     height: 900,
     minWidth: 960,
     minHeight: 640,
-    title: 'WE Extractor',
+    title: 'Wallpeel',
     frame: false,
+    icon: path.join(__dirname, '..', 'build', 'icon.png'),
     backgroundColor: '#f7f7f8',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -262,6 +368,8 @@ ipcMain.handle('extract:start', async (event, payload) => {
   const ext = path.extname(inputPath).toLowerCase()
 
   if (!fs.existsSync(inputPath)) throw new Error('输入文件不存在')
+  console.log('[extract:start] outputDir:', outputDir)
+  if (!outputDir) throw new Error('输出目录为空')
   if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true })
 
   // 壁纸文件夹路径（解压目标）
@@ -360,11 +468,19 @@ ipcMain.handle('extract:start', async (event, payload) => {
       if (pj.title) wpName = pj.title
     } catch {}
   }
+  // 过滤 Windows 文件名非法字符
+  wpName = wpName.replace(/[<>:"/\\|?*]/g, '_')
   const copyDir = path.join(outputDir, wpName)
   if (!fs.existsSync(copyDir)) fs.mkdirSync(copyDir, { recursive: true })
 
   const usefulExts = ['.mp4', '.webm', '.mov', '.mkv', '.png', '.jpg', '.jpeg']
-  const usefulFiles = files.filter((f) => usefulExts.includes(f.ext))
+  const usefulFiles = files.filter((f) => {
+    if (!usefulExts.includes(f.ext)) return false
+    // 排除预览图文件
+    const name = f.name.toLowerCase()
+    if (name.startsWith('preview.')) return false
+    return true
+  })
   let copiedCount = 0
 
   for (const file of usefulFiles) {
@@ -569,14 +685,15 @@ ipcMain.handle('wallpaper:autoFind', async () => {
 })
 
 /**
- * 清理壁纸目录中的冗余文件（保留视频、图片、project.json、预览图、shaders）
+ * 清理壁纸目录中的冗余文件（只保留视频、图片、project.json、预览图）
  */
 ipcMain.handle('wallpaper:cleanup', async (_event, wpDir) => {
   if (!fs.existsSync(wpDir)) return { success: false, deletedCount: 0, error: '目录不存在' }
 
-  const keepExts = ['.mp4', '.webm', '.mov', '.mkv', '.png', '.jpg', '.jpeg', '.gif']
+  // 只保留有用的扩展名
+  const keepExts = ['.mp4', '.webm', '.mov', '.mkv', '.png', '.jpg', '.jpeg', '.gif', '.pkg']
+  // 只保留有用的文件
   const keepFiles = ['project.json', 'preview.jpg', 'preview.png', 'preview.gif']
-  const keepDirs = ['shaders']
 
   let deletedCount = 0
   const entries = fs.readdirSync(wpDir, { withFileTypes: true })
@@ -585,7 +702,7 @@ ipcMain.handle('wallpaper:cleanup', async (_event, wpDir) => {
     const fullPath = path.join(wpDir, entry.name)
 
     if (entry.isDirectory()) {
-      if (keepDirs.includes(entry.name)) continue
+      // 删除所有文件夹（PKG 解压出来的文件夹都不需要）
       try {
         fs.rmSync(fullPath, { recursive: true, force: true })
         deletedCount++
@@ -593,8 +710,10 @@ ipcMain.handle('wallpaper:cleanup', async (_event, wpDir) => {
         console.warn(`删除目录失败: ${fullPath} - ${err.message}`)
       }
     } else {
+      // 跳过需要保留的文件
       if (keepFiles.includes(entry.name)) continue
       if (keepExts.includes(path.extname(entry.name).toLowerCase())) continue
+      // 删除其他文件
       try {
         fs.unlinkSync(fullPath)
         deletedCount++
@@ -693,10 +812,17 @@ ipcMain.handle('batch:extractPKG', async (event, payload) => {
       const files = scanDir(wpDir)
 
       // 复制有用文件到输出目录（使用壁纸名称）
-      const copyDir = path.join(outputDir, wp.title || wp.id)
+      const wpTitle = (wp.title || wp.id).replace(/[<>:"/\\|?*]/g, '_')
+      const copyDir = path.join(outputDir, wpTitle)
       if (!fs.existsSync(copyDir)) fs.mkdirSync(copyDir, { recursive: true })
 
-      const usefulFiles = files.filter((f) => usefulExts.includes(f.ext))
+      const usefulFiles = files.filter((f) => {
+        if (!usefulExts.includes(f.ext)) return false
+        // 排除预览图文件
+        const name = f.name.toLowerCase()
+        if (name.startsWith('preview.')) return false
+        return true
+      })
       let copiedCount = 0
       for (const file of usefulFiles) {
         try {
@@ -708,11 +834,15 @@ ipcMain.handle('batch:extractPKG', async (event, payload) => {
         }
       }
 
-      results.push({ id: wp.id, success: true, files, copiedCount })
+      results.push({ id: wp.id, title: wp.title, success: true, files, copiedCount })
       event.sender.send('extract:log', `完成: ${wp.title}，复制 ${copiedCount} 个文件`)
+      // 通知前端单个壁纸提取完成
+      event.sender.send('batch:extractProgress', { id: wp.id, title: wp.title, success: true, copiedCount })
     } catch (err) {
-      results.push({ id: wp.id, success: false, error: err.message })
+      results.push({ id: wp.id, title: wp.title, success: false, error: err.message })
       event.sender.send('extract:log', `失败: ${wp.title} - ${err.message}`)
+      // 通知前端单个壁纸提取失败
+      event.sender.send('batch:extractProgress', { id: wp.id, title: wp.title, success: false, error: err.message })
     }
   }
 
@@ -876,10 +1006,19 @@ ipcMain.handle('mpkg:extract', async (event, payload) => {
             } catch {}
           }
         }
+        // 过滤 Windows 文件名非法字符
+        wpName = wpName.replace(/[<>:"/\\|?*]/g, '_')
         const copyDir = path.join(outputDir, wpName)
         if (!fs.existsSync(copyDir)) fs.mkdirSync(copyDir, { recursive: true })
 
-        const usefulFiles = allFiles.filter((f) => usefulExts.includes(f.ext))
+        // 过滤有用文件，排除预览图（preview.jpg/png/gif）
+        const usefulFiles = allFiles.filter((f) => {
+          if (!usefulExts.includes(f.ext)) return false
+          // 排除预览图文件
+          const name = f.name.toLowerCase()
+          if (name.startsWith('preview.')) return false
+          return true
+        })
         for (const ufile of usefulFiles) {
           try {
             const targetPath = path.join(copyDir, ufile.name)
@@ -904,6 +1043,13 @@ ipcMain.handle('mpkg:extract', async (event, payload) => {
 })
 
 // ========== 窗口控制（无边框窗口） ==========
+
+/**
+ * 获取用户桌面路径
+ */
+ipcMain.handle('shell:getDesktopPath', async () => {
+  return app.getPath('desktop')
+})
 
 ipcMain.handle('window:minimize', async (event) => {
   const win = BrowserWindow.fromWebContents(event.sender)
