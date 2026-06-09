@@ -4,6 +4,8 @@
 
 <div align="center">
 
+<img src="docs/logo.svg" alt="Wallpeel Logo" width="100">
+
 # Wallpeel
 
 **你的壁纸，不止于壁纸。**
@@ -43,13 +45,33 @@ Wallpeel 让你轻松提取 Wallpaper Engine 的壁纸资源。不管是视频�
 
 ## 📸 截图
 
-<!-- TODO: 添加截图 -->
-<!-- ![主界面 - 亮色模式](docs/screenshots/main-light.png) -->
-<!-- ![主界面 - 暗色模式](docs/screenshots/main-dark.png) -->
-<!-- ![右键菜单](docs/screenshots/context-menu.png) -->
-<!-- ![MPKG 管理器](docs/screenshots/mpkg-manager.png) -->
-<!-- ![详情面板](docs/screenshots/detail-panel.png) -->
-<!-- ![设置面板](docs/screenshots/settings.png) -->
+<p align="center">
+  <img src="docs/screenshot-main.png" alt="主界面 - 壁纸网格展示" width="100%">
+</p>
+
+<p align="center">
+  <em>网格展示所有壁纸，一目了然</em>
+</p>
+
+<br/>
+
+<p align="center">
+  <img src="docs/screenshot-detail.png" alt="详情面板 - 资源信息" width="100%">
+</p>
+
+<p align="center">
+  <em>详情面板显示资源信息，一键提取</em>
+</p>
+
+<br/>
+
+<p align="center">
+  <img src="docs/screenshot-dark.png" alt="暗色主题" width="100%">
+</p>
+
+<p align="center">
+  <em>支持亮色/暗色主题切换，护眼更舒适</em>
+</p>
 
 ---
 
