@@ -80,7 +80,7 @@ Wallpeel 让你轻松提取 Wallpaper Engine 的壁纸资源。不管是视频�
 ### 方式一：直接下载安装（推荐）
 
 1. 前往 [Releases](https://github.com/XA-anjiu/wallpeel/releases) 下载最新安装包
-2. 双击运行 `WE Extractor Setup 0.1.0.exe`
+2. 双击运行 `Wallpeel.Setup.0.1.1.exe`
 3. 按照提示完成安装
 
 **系统要求：**
